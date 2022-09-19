@@ -7,26 +7,20 @@ module "ecs" {
     execute_command_configuration = {
       logging = "OVERRIDE"
       log_configuration = {
-        cloud_watch_log_group_name = "/aws/ecs/aws-ec2"
+        cloud_watch_log_group_name = "${module.log_group.cloudwatch_log_group_name}"
       }
     }
   }
 
-  autoscaling_capacity_providers = {
-    one = {
-      auto_scaling_group_arn         = module.asg.autoscaling_group_arn
-      managed_termination_protection = "ENABLED"
-
-      managed_scaling = {
-        maximum_scaling_step_size = 5
-        minimum_scaling_step_size = 1
-        status                    = "ENABLED"
-        target_capacity           = 1
-      }
-
+  fargate_capacity_providers = {
+    FARGATE = {
       default_capacity_provider_strategy = {
-        weight = 60
-        base   = 20
+        weight = 50
+      }
+    }
+    FARGATE_SPOT = {
+      default_capacity_provider_strategy = {
+        weight = 50
       }
     }
   }
@@ -43,7 +37,13 @@ module "log_group" {
 }
 
 resource "aws_ecs_task_definition" "service" {
-  family = "service"
+  # name                     = var.service_name
+  family                   = "fargate-task-definition"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.ecsTaskExecutionRole.arn
   container_definitions = jsonencode([
     {
       "logConfiguration" : {
@@ -56,8 +56,6 @@ resource "aws_ecs_task_definition" "service" {
       },
       "name" : "${var.service_name}",
       "image" : "${var.image}",
-      "cpu" : 10,
-      "memory" : 512,
       "essential" : true,
       "portMappings" : [
         {
@@ -68,10 +66,10 @@ resource "aws_ecs_task_definition" "service" {
     }
   ])
 
-  volume {
-    name      = "service-storage"
-    host_path = "/ecs/service-storage"
-  }
+  # volume {
+  #   name      = "service-storage"
+  #   host_path = "/ecs/service-storage"
+  # }
 
   #   placement_constraints {
   #     type       = "memberOf"
@@ -80,18 +78,22 @@ resource "aws_ecs_task_definition" "service" {
   tags = var.tags
 }
 
-resource "aws_ecs_service" "service" {
+resource "aws_ecs_service" "aws_ecs_service" {
   name            = var.service_name
   cluster         = module.ecs.cluster_id
   task_definition = aws_ecs_task_definition.service.arn
   desired_count   = var.desired_count
-  #   iam_role        = aws_iam_role.foo.arn
-  depends_on = [aws_ecs_task_definition.service]
+  # iam_role        = aws_iam_role.ecsTaskExecutionRole.arn
+  depends_on = [aws_ecs_task_definition.service, aws_iam_role.ecsTaskExecutionRole]
 
-  ordered_placement_strategy {
-    type  = "binpack"
-    field = "cpu"
+  network_configuration {
+    subnets = module.vpc.private_subnets
   }
+
+  # ordered_placement_strategy {
+  #   type  = "binpack"
+  #   field = "cpu"
+  # }
   lifecycle {
     ignore_changes = [desired_count]
   }
@@ -105,5 +107,5 @@ resource "aws_ecs_service" "service" {
   #   base   = 20
   # }
   # propagate_tags = "SERVICE"
-  tags           = var.tags
+  tags = var.tags
 }
